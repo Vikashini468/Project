@@ -1,39 +1,50 @@
-# backend/tech_answer.py
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-from backend.ollama_client import evaluate_technical_answer
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
+from backend.ollama_client import evaluate_answer_with_llm
 
 router = APIRouter()
 
-@router.post("/submit-answer")
-def submit_answer(request: Request, payload: dict):
+class AnswerRequest(BaseModel):
+    answer: str
 
-    answer = payload.get("answer")
+
+@router.post("/submit-answer")
+def submit_answer(payload: AnswerRequest, request: Request):
+
+    # ---- BASIC FLOW CHECKS ----
+    if not request.session.get("intro_done"):
+        raise HTTPException(status_code=400, detail="Intro not completed")
+
+    if request.session.get("tech_done"):
+        raise HTTPException(status_code=400, detail="Interview already completed")
+
+    # ---- REQUIRED STATE ----
     question = request.session.get("current_question")
     level = request.session.get("current_level")
     branch = request.session.get("branch")
 
-    # 🚨 HARD VALIDATION
-    if not question:
-        return JSONResponse(
-            {"error": "Interview state corrupted (missing question)"},
-            status_code=400
+    if not all([question, level, branch]):
+        raise HTTPException(
+            status_code=400,
+            detail="No active technical question"
         )
 
-    if not answer:
-        return JSONResponse(
-            {"error": "Empty answer"},
-            status_code=400
-        )
-
-    feedback = evaluate_technical_answer(
+    # ---- EVALUATE ----
+    feedback = evaluate_answer_with_llm(
         question=question,
-        answer=answer,
+        answer=payload.answer,
         branch=branch,
         level=level
     )
 
-    # advance index
+    # ---- ADVANCE INDEX ----
     request.session["tech_q_index"] += 1
 
-    return {"feedback": feedback}
+    # ---- CHECK COMPLETION ----
+    if request.session["tech_q_index"] >= len(request.session.get("tech_levels", [])):
+        request.session["tech_done"] = True
+
+    return {
+        "feedback": feedback,
+        "tech_done": request.session.get("tech_done", False)
+    }

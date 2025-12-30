@@ -40,12 +40,11 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "llama3"
 
 
-def generate_branch_question(branch: str, skills: list[str], level: str) -> str:
+def generate_branch_question(branch: str,level: str) -> str:
     prompt = f"""
 You are a strict technical interviewer.
 
 Candidate branch: {branch}
-Candidate skills: {', '.join(skills)}
 Difficulty: {level}
 
 Rules:
@@ -73,7 +72,7 @@ Ask now.
     question = res.json()["response"].strip()
     return question.split("\n")[0]
 
-def evaluate_technical_answer(
+def evaluate_answer_with_llm(
     question: str,
     answer: str,
     branch: str,

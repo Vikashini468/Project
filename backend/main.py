@@ -10,6 +10,7 @@ from backend.resume import router as resume_router
 from backend.interview import router as interview_router
 from backend.intro import router as intro_router
 from backend.tech_answer import router as tech_answer_router
+from backend.debug import router as debug_router
 
 # ---------------- APP ----------------
 app = FastAPI()
@@ -17,7 +18,8 @@ app = FastAPI()
 app.add_middleware(
     SessionMiddleware,
     secret_key="super-secret-key",
-    same_site="lax"
+    same_site="lax",
+    https_only=False 
 )
 
 Base.metadata.create_all(bind=engine)
@@ -31,7 +33,7 @@ app.include_router(resume_router)
 app.include_router(interview_router)
 app.include_router(intro_router)
 app.include_router(tech_answer_router)
-
+app.include_router(debug_router)
 # ---------------- PAGES ----------------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -65,6 +67,16 @@ def chat_page(request: Request):
 @app.get("/chat-state")
 def chat_state(request: Request):
     return {
+        "resume_uploaded": request.session.get("resume_uploaded", False),
+        "intro_done": request.session.get("intro_done", False),
+        "tech_done": request.session.get("tech_done", False),
+    }
+
+@app.post("/chat")
+def chat_endpoint(request: Request):
+    """Unified chat endpoint for frontend compatibility"""
+    return {
+        "bot_message": "Please use the specific endpoints for interview flow.",
         "resume_uploaded": request.session.get("resume_uploaded", False),
         "intro_done": request.session.get("intro_done", False),
         "tech_done": request.session.get("tech_done", False),

@@ -2,11 +2,18 @@ const chatBody = document.getElementById("chat-body");
 const textInput = document.getElementById("text-input");
 const sendBtn = document.getElementById("send-btn");
 const micBtn = document.getElementById("mic-btn");
+window.onload = () => {
+  fetch("/reset-session", { credentials: "include" });
+};
+
 
 /* =====================
    STATE
 ===================== */
-let phase = "intro"; // intro | tech
+let phase = null;              // "intro" | "tech"
+let questionLoading = false;
+let awaitingAnswer = false;
+let answerLocked = false;
 
 /* =====================
    UI HELPERS
@@ -28,17 +35,42 @@ function addUser(text) {
 }
 
 /* =====================
-   INITIAL MESSAGE
-   (NO /chat-state — backend doesn't have it)
+   INITIAL SYNC (CRITICAL)
 ===================== */
-addBot("Tell me about yourself.");
+fetch("/chat-state", { credentials: "include" })
+    .then(res => res.json())
+    .then(state => {
+        if (!state.resume_uploaded) {
+            addBot("⚠️ Please upload your resume first.");
+            return;
+        }
+
+        if (!state.intro_done) {
+            phase = "intro";
+            addBot("Tell me about yourself.");
+            return;
+        }
+
+        if (state.tech_done) {
+            addBot("✅ Interview already completed.");
+            return;
+        }
+
+        // intro done, tech ongoing
+        phase = "tech";
+        addBot("Resume received. Continuing interview.");
+        askNextQuestion();
+    })
+    .catch(() => {
+        addBot("⚠️ Failed to sync interview state.");
+    });
 
 /* =====================
    TEXT SUBMIT
 ===================== */
 sendBtn.onclick = () => {
     const text = textInput.value.trim();
-    if (!text) return;
+    if (!text || answerLocked) return;
     textInput.value = "";
     handleAnswer(text);
 };
@@ -47,23 +79,26 @@ sendBtn.onclick = () => {
    ANSWER ROUTER
 ===================== */
 function handleAnswer(text) {
+    if (answerLocked) return;
+    answerLocked = true;
+
     addUser(text);
 
     if (phase === "intro") {
         submitIntro(text);
-    } else {
+    } else if (phase === "tech") {
         submitTechAnswer(text);
     }
 }
 
 /* =====================
-   INTRO SUBMISSION
+   INTRO
 ===================== */
 async function submitIntro(text) {
     try {
         const res = await fetch("/evaluate-intro", {
             method: "POST",
-            credentials: "include", // 🔥 REQUIRED
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ intro: text })
         });
@@ -71,7 +106,8 @@ async function submitIntro(text) {
         const data = await res.json();
 
         if (!res.ok) {
-            addBot("⚠️ " + (data.detail || data.error || "Intro failed"));
+            addBot("⚠️ " + (data.detail || "Intro failed"));
+            answerLocked = false;
             return;
         }
 
@@ -79,48 +115,70 @@ async function submitIntro(text) {
         addBot(data.feedback);
 
         phase = "tech";
+        answerLocked = false;
         askNextQuestion();
 
-    } catch (err) {
+    } catch {
         addBot("⚠️ Server error during intro.");
+        answerLocked = false;
     }
 }
 
 /* =====================
-   TECH QUESTIONS
+   QUESTIONS
 ===================== */
 async function askNextQuestion() {
+    if (questionLoading || awaitingAnswer) return;
+
+    questionLoading = true;
+    awaitingAnswer = true;
+
     try {
         const res = await fetch("/generate-question", {
             method: "GET",
-            credentials: "include" // 🔥 REQUIRED
+            credentials: "include"
         });
 
         const data = await res.json();
 
         if (!res.ok) {
             addBot("⚠️ Failed to load question.");
+            awaitingAnswer = false;
             return;
         }
 
         if (data.done) {
             addBot("✅ Interview completed.");
+            awaitingAnswer = false;
             return;
         }
 
         addBot(`Question ${data.question_no}:`);
         addBot(data.question);
 
-    } catch (err) {
+    } catch {
         addBot("⚠️ Server error while fetching question.");
+        awaitingAnswer = false;
+    } finally {
+        questionLoading = false;
     }
 }
 
+/* =====================
+   TECH ANSWER
+===================== */
 async function submitTechAnswer(text) {
+    if (!awaitingAnswer) {
+        answerLocked = false;
+        return;
+    }
+
+    awaitingAnswer = false;
+
     try {
         const res = await fetch("/submit-answer", {
             method: "POST",
-            credentials: "include", // 🔥 REQUIRED
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ answer: text })
         });
@@ -128,24 +186,27 @@ async function submitTechAnswer(text) {
         const data = await res.json();
 
         if (!res.ok) {
-            addBot("⚠️ " + (data.detail || data.error || "Evaluation failed"));
+            addBot("⚠️ " + (data.detail || "Evaluation failed"));
+            awaitingAnswer = true;
+            answerLocked = false;
             return;
         }
 
         addBot("📊 Feedback:");
         addBot(data.feedback);
 
+        answerLocked = false;
         askNextQuestion();
 
-    } catch (err) {
-        addBot("⚠️ Server error during answer evaluation.");
+    } catch {
+        addBot("⚠️ Server error during evaluation.");
+        awaitingAnswer = true;
+        answerLocked = false;
     }
 }
 
 /* =====================
-   MIC SETUP
-   - Max 60s
-   - User can stop early
+   MIC (SAFE)
 ===================== */
 let recognition;
 let isRecording = false;
@@ -160,58 +221,44 @@ if ("SpeechRecognition" in window || "webkitSpeechRecognition" in window) {
     recognition.interimResults = false;
     recognition.continuous = true;
 
-    recognition.onresult = (event) => {
-        let transcript = "";
-        for (let i = 0; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript + " ";
+    recognition.onresult = (e) => {
+        let text = "";
+        for (let i = 0; i < e.results.length; i++) {
+            text += e.results[i][0].transcript + " ";
         }
-        recognition.finalTranscript = transcript.trim();
-    };
-
-    recognition.onerror = (e) => {
-        addBot("🎤 Mic error: " + e.error);
-        cleanupMic();
+        recognition.finalTranscript = text.trim();
     };
 
     recognition.onend = () => {
-        if (recognition.finalTranscript) {
+        if (recognition.finalTranscript && !answerLocked) {
             handleAnswer(recognition.finalTranscript);
-            recognition.finalTranscript = "";
         }
+        recognition.finalTranscript = "";
         cleanupMic();
     };
+
+    recognition.onerror = () => cleanupMic();
 } else {
     micBtn.disabled = true;
-    micBtn.innerText = "❌";
 }
 
-/* =====================
-   MIC BUTTON
-===================== */
 micBtn.onclick = () => {
-    if (!recognition) return;
-
-    if (!isRecording) {
-        recognition.finalTranscript = "";
-        recognition.start();
-        isRecording = true;
-        micBtn.innerText = "⏹";
-
-        // ⏱️ MAX 60 seconds (not compulsory)
-        stopTimer = setTimeout(() => {
-            recognition.stop();
-        }, 60000);
-
-    } else {
-        recognition.stop();
+    if (!recognition || isRecording) {
+        recognition?.stop();
+        return;
     }
+
+    recognition.finalTranscript = "";
+    recognition.start();
+    isRecording = true;
+    micBtn.innerText = "⏹";
+
+    stopTimer = setTimeout(() => recognition.stop(), 60000);
 };
 
 function cleanupMic() {
     isRecording = false;
     micBtn.innerText = "🎤";
-    if (stopTimer) {
-        clearTimeout(stopTimer);
-        stopTimer = null;
-    }
+    if (stopTimer) clearTimeout(stopTimer);
+    stopTimer = null;
 }
