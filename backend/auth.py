@@ -87,5 +87,8 @@ def login(
     if not user or not verify_password(password, user.password):
         return RedirectResponse("/login", status_code=303)
 
+    # ✅ THIS LINE FIXES YOUR BUG
     request.session["user"] = user.email
+
     return RedirectResponse("/upload", status_code=303)
+

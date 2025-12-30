@@ -4,32 +4,38 @@ from backend.ollama_client import evaluate_intro_with_llm
 
 router = APIRouter()
 
+
 class IntroRequest(BaseModel):
     intro: str
 
-@router.post("/evaluate-intro")
-def evaluate_intro(req: IntroRequest, request: Request):
 
+@router.post("/evaluate-intro")
+def evaluate_intro(payload: IntroRequest, request: Request):
+    # ---------- STATE VALIDATION ----------
     if not request.session.get("resume_uploaded"):
-        raise HTTPException(403, "Resume not uploaded")
+        raise HTTPException(status_code=403, detail="Resume not uploaded")
 
     if request.session.get("intro_done"):
-        raise HTTPException(400, "Intro already completed")
+        raise HTTPException(status_code=400, detail="Intro already completed")
 
-    resume_data = request.session["resume_data"]
+    if not payload.intro.strip():
+        raise HTTPException(status_code=400, detail="Empty intro")
 
+    resume_data = request.session.get("resume_data")
+    if not resume_data:
+        raise HTTPException(status_code=500, detail="Resume data missing")
+
+    # ---------- LLM EVALUATION ----------
     feedback = evaluate_intro_with_llm(
-        intro_text=req.intro,
+        intro_text=payload.intro,
         resume_text=request.session["resume_text"],
         branch=resume_data["branch"],
         skills=resume_data["skills"]
     )
 
-    # ✅ SET ONLY HERE
+    # ---------- UPDATE STATE ----------
     request.session["intro_done"] = True
 
     return {
-        "feedback": feedback,
-        "next": "tech"
+        "feedback": feedback
     }
-

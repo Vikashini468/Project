@@ -1,3 +1,4 @@
+# backend/tech_answer.py
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from backend.ollama_client import evaluate_technical_answer
@@ -12,8 +13,18 @@ def submit_answer(request: Request, payload: dict):
     level = request.session.get("current_level")
     branch = request.session.get("branch")
 
-    if not question or not answer:
-        return JSONResponse({"error": "Invalid state"}, status_code=400)
+    # 🚨 HARD VALIDATION
+    if not question:
+        return JSONResponse(
+            {"error": "Interview state corrupted (missing question)"},
+            status_code=400
+        )
+
+    if not answer:
+        return JSONResponse(
+            {"error": "Empty answer"},
+            status_code=400
+        )
 
     feedback = evaluate_technical_answer(
         question=question,
@@ -22,9 +33,7 @@ def submit_answer(request: Request, payload: dict):
         level=level
     )
 
+    # advance index
     request.session["tech_q_index"] += 1
 
-    return {
-        "feedback": feedback,
-        "next": "question"
-    }
+    return {"feedback": feedback}
